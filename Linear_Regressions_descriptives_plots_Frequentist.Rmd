@@ -1,0 +1,349 @@
+---
+title: "Supplemental_Online_Material"
+author: "Shadi"
+date: "5/10/2021"
+output: 
+  html_document:
+    toc: true 
+    toc_depth: 2  
+    toc_float: true
+---
+
+Note: This is the online supplemental material for *Creative performance under physical threat.*
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/shaditaba/Desktop/cogs_courses/Spring_2021/Rachel_stats/Final_project/")
+
+```
+
+Load Packages:
+```{r}
+library(tidyverse)
+library(broom)
+library(broom.mixed)
+library(emmeans)
+library(lme4)
+library(psych)
+library(apaTables)
+library(car)
+library(brms)
+library(tidybayes)
+```
+
+Import the data:
+```{r}
+data<- read_csv("/Users/shaditaba/Desktop/cogs_courses/Spring_2021/Rachel_stats/Final_project/Stats_final_project/Study_one_full_labeled_cleaned_data_8_20_20.csv")
+```
+# Data selection and data cleaning    
+
+Criteria for removing participants from the study:
+1- If they had seen the task before  
+2- If they had seen the VRs before  
+3- If they had problems playing the VRs  
+4- If they did not complete the study  
+
+```{r}
+data_filtered<- data %>% 
+  ##selecting relevant columns:
+select(X1, base_frightened, base_scared, post_frightened, post_scared, Video_condition, Correct_1, Correct_2, Correct_3, Correct_4, Correct_5, Correct_6,Correct_7, Correct_8, Correct_9, Correct_10, Correct_11, Correct_12, Convergent_Creativity_Score, ethnicity, gender, age, education,languages, seen_video, seen_task, video_problems)%>% 
+  ##Changing the name of the columns:
+rename(subject_id = X1, baseline_fear=base_frightened, post_VR_fear = post_frightened, Item_1 = Correct_1 , Item_2= Correct_2 , Item_3= Correct_3, Item_4= Correct_4, Item_5 = Correct_5 , Item_6 = Correct_6, Item_7= Correct_7, Item_8 = Correct_8 , Item_9 = Correct_9, Item_10 = Correct_10 , Item_11= Correct_11, Item_12 = Correct_12 , CR_Score = Convergent_Creativity_Score, seen_VR = seen_video,VR_problems = video_problems,VR_condition = Video_condition)%>% 
+  ##Filtering incomplete data:
+filter(seen_task != "3",seen_task != "2", seen_VR != "3",seen_VR != "2", VR_problems != "3", VR_problems != "2" ) %>%
+print()
+```
+
+Identifying and removing NAs:
+```{r, results='hide'}
+#Finding NAs
+map(data_filtered, ~sum(is.na(.)))
+#Removing NAs
+data_filtered<- na.omit(data_filtered)
+
+```
+# Data preparation for modeling  
+## Pivoting  
+
+To run multilevel modeling, the data needs to be pivoted to a longer version.  
+That is, I need to make a new column called Item_Num. This column will mark the number of the creativity item that participants saw. Overall, there were 12 creative items in this study.
+
+```{r}
+pivot_data<- data_filtered%>% 
+ pivot_longer(cols = Item_1 : Item_12, names_to = "Item_Num", values_to = "score") %>%
+  print()
+```
+
+## Making factors  
+
+In addition, some variables need to be converted into factors. For example, creative item numbers, subject id, the score on each creative item, and the VR condition.  
+Please pay attention that the chunk of code below includes some columns that were not used in the analyses for this paper. For example, composite scores and the difference between the level of fear before and after the VR. You can ignore those columns as they are meant for future research questions.   
+
+
+```{r}
+pivot_data <- pivot_data %>% mutate(score_fac = factor(score), subject_id_fac = factor(subject_id), item_fac= factor(Item_Num), composite_post_fear= (post_VR_fear+post_scared)/2, Z.composite_post_fear=scale(composite_post_fear, center = T, scale = T), diff= post_VR_fear - baseline_fear, post_VR_fear_fac = factor(post_VR_fear), baseline_fear_fac= factor(baseline_fear), composite_base_fear= (baseline_fear+base_scared)/2, Z.composite_base_fear=scale(composite_base_fear, center = T, scale = T),VR_fac = factor(VR_condition) )
+```
+
+## pivoting again  
+
+Pivoting the data into a longer format once again. This time, I need to make a column that marks if the level of fear is measured before or after watching the VR stimuli.
+
+```{r}
+pivot_data_2<- pivot_data%>% 
+ pivot_longer(cols = c(post_VR_fear, baseline_fear), names_to = "fear_time", values_to = "fear_level") %>%
+  print()
+```
+## Contrast coding  
+
+### coding VR condition:  
+Threat condition = 0  
+Control condition = 1 
+
+```{r}
+levels(pivot_data_2$VR_fac)<- c("Threat", "Control")
+```
+```{r}
+contrasts(pivot_data_2$VR_fac)<-c(0, 1)
+```
+```{r}
+contrasts(pivot_data_2$VR_fac)
+```
+
+### Dummy Coding time of fear measurement  
+post-VR (aka post_VR_fear)= 0
+pre-VR (aka baseline_fear) = 1
+
+```{r}
+pivot_data_2$fear_fac<- factor(pivot_data_2$fear_time)
+contrasts(pivot_data_2$fear_fac)<-c(1, 0)
+```
+
+```{r}
+contrasts(pivot_data_2$fear_fac)
+```
+
+
+# Preliminary visualisations   
+
+### Histogram of the level of fear both pre and post watching VR stimuli  
+
+```{r}
+Hist_1<- pivot_data_2 %>% group_by(fear_level, fear_fac)%>% summarise(sub= unique(subject_id))%>% print()
+mu<- Hist_1%>%group_by(fear_fac) %>% mutate(mean=mean(fear_level))
+
+
+t<-ggplot(Hist_1, aes(x=fear_level, color=fear_fac)) +
+  geom_histogram(fill= "white",position = "dodge")+
+  geom_vline(data=mu, aes(xintercept=mean, color=fear_fac),
+             linetype="dashed")+
+  theme(legend.position="top") 
+t + xlab("Fear Level") + 
+  theme(plot.title = element_text(size = 20))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 10))+ 
+  labs(color="Time of fear measurement") +
+  scale_color_brewer(palette="Dark2") +
+  theme_minimal()+theme_classic()+theme(legend.position="top")
+```
+
+### Histogram of the level of fear in both the Threat and the Control condition  
+
+```{r}
+Hist_2<- pivot_data_2 %>% group_by(fear_level, VR_fac)%>% summarise(sub= unique(subject_id))%>% print()
+mu2<- Hist_2%>%group_by(VR_fac) %>% mutate(mean=mean(fear_level))
+
+# Interleaved histograms
+# ggplot(Hist_2, aes(x=fear, color=VR_fac)) +
+#   geom_histogram(fill="white", position = "dodge")+
+#   theme(legend.position="top")
+# Add mean lines
+t<-ggplot(Hist_2, aes(x=fear_level, color=VR_fac)) +
+  geom_histogram(fill= "white",position = "dodge")+
+  geom_vline(data=mu2, aes(xintercept=mean, color=VR_fac),
+             linetype="dashed")+
+  theme(legend.position="top") 
+t + xlab("Fear Level") + 
+  theme(plot.title = element_text(size = 20))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 10))+ 
+  labs(color="VR condition") +
+  scale_color_brewer(palette="Dark2") +
+  theme_minimal()+theme_classic()+theme(legend.position="top")
+```
+
+### Histogram of the overall creativity score in both the Threat and the Control condition   
+
+```{r}
+Hist_3<- pivot_data_2%>% group_by(CR_Score, VR_fac)%>% summarise(sub= unique(subject_id)) %>% print()
+mu3<- Hist_3%>%group_by(VR_fac) %>% mutate(mean=mean(CR_Score))
+
+# Interleaved histograms
+# ggplot(Hist_3, aes(x=CR_Score, color=VR_fac)) +
+#   geom_histogram(fill="white", position = "dodge")+
+#   theme(legend.position="top")
+# Add mean lines
+t<-ggplot(Hist_3, aes(x=CR_Score, color=VR_fac)) +
+  geom_histogram(fill= "white",position = "dodge")+
+  geom_vline(data=mu3, aes(xintercept=mean, color=VR_fac),
+             linetype="dashed")+
+  theme(legend.position="top") 
+t + xlab("Creativity score") + 
+  theme(plot.title = element_text(size = 20))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 10))+ 
+  labs(color="VR Condition") +
+  scale_color_brewer(palette="Dark2") +
+  theme_minimal()+theme_classic()+theme(legend.position="top")
+```
+
+### Plot of mean level of fear across conditions and time of measurement:  
+
+```{r}
+n<- ggplot(pivot_data_2)+
+stat_summary(aes(x = VR_fac, y = fear_level, color = fear_fac), 
+fun.data = 'mean_cl_boot', geom = 'pointrange')+
+  xlab("VR Condition") + 
+  ylab("Fear Level") + 
+  theme_classic() +
+  theme(plot.title = element_text(size = 15))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 15)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 15)) 
+  
+n+labs(color="Time of measurement")
+```
+
+### Plot of mean creative score across VR conditions:    
+
+```{r}
+p<- ggplot(data=pivot_data_2, aes(x=VR_fac, y=CR_Score, color= VR_fac)) + 
+  stat_summary(geom = "pointrange", fun.data = "mean_cl_boot", size = 1)+
+  xlab("VR Condition") + 
+  ylab("Mean Creativity Score") + 
+  theme_classic()+
+  theme(plot.title = element_text(size = 20))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.title = element_text(size = 20)) + 
+  theme(legend.text = element_text(size = 15)) 
+  
+p+labs(color=" VR Condition")
+ 
+```
+
+# Descriptive statistics 
+
+```{r}
+## Descriptive statistics for age:
+standard_error <- function(x) sd(x) / sqrt(length(x))
+
+pivot_data_2%>% summarise(mean= mean(age), variance=sd(age),standard_Error=standard_error(age), n=length(unique(subject_id)))%>% print()
+```
+```{r}
+## Descriptive statistics for age by gender:
+pivot_data_2%>% group_by(gender) %>%summarise(mean= mean(age), variance=sd(age), standard_Error=standard_error(age), n=length(unique(subject_id)))%>% print()
+#1 is male/ 2 is female/ 3 is non-binary
+```
+
+```{r}
+## Descriptive stats for the level of fear by condition: 
+pivot_data_2%>% group_by(VR_fac)%>% summarise(n=length(unique(subject_id)), mean_fear= mean(fear_level), sd_fear= sd(fear_level), se_fear=standard_error(fear_level))%>% print()
+```
+
+```{r}
+## Descriptive stats for the overall creativity score (from 0-12) by condition: 
+pivot_data_2%>% group_by(VR_fac)%>% summarise(n=length(unique(subject_id)), mean_score= mean(CR_Score), sd_score= sd(CR_Score), se_score= standard_error(CR_Score))%>% print()
+```
+```{r}
+## Descriptive statistics for the level of fear pre and post VR by condition
+#1 is threat/ 2 is control
+pivot_data%>% group_by(VR_fac)%>% summarise(n=length(unique(subject_id)), mean_base= mean(baseline_fear), sd_base= sd(baseline_fear), se_base= standard_error(baseline_fear), mean_post= mean(post_VR_fear), sd_post= sd(post_VR_fear), se_post= standard_error(post_VR_fear))%>% print()
+```
+
+# Manipulation checks  
+
+In this section, I want to investigate if the threat manipulation was in fact effective.   
+If that is the case, then participants in the Threat condition must report higher levels of fear after watching the VR relative to participants in the Control condition.  
+I built mixed effect linear regression.  
+Model specifications include:  
+Dependent variable: Level of fear (from 1 to 4)
+Fixed effects:  
+  1- VR condition (Threat vs. Control)  
+  2- Time of fear measurement (pre vs. post VR)  
+  3- Interaction between VR condition and the time of fear measurement  
+Random effects:  
+  1- Random intercepts for participants  
+  
+```{r}
+options(scipen=999)
+manipulation_model <- lmer(fear_level ~  1 + VR_fac * fear_fac + (1 | subject_id), data = pivot_data_2)
+summary (manipulation_model)
+```
+
+### The interaction plot  
+
+```{r}
+v<- ggplot(pivot_data_2)+
+stat_summary(aes(x = VR_fac, y = fear_level, color = fear_fac))+
+stat_summary(aes(x = VR_fac, y = fear_level, color = fear_fac, group=fear_fac),
+fun = 'mean', geom = 'line', size = 1) +
+  xlab("VR Condition") + 
+  ylab("Fear Level") + 
+  theme_classic() +
+  theme(plot.title = element_text(size = 15))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 15)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 15))
+v+labs(color="Time of measurement")
+```
+
+The model results indicate that the threat manipulation worked and participants were more scared in the threat condition. 
+
+# Main Analysis  
+This section investigates the effects of threat manipulation on creative performance in the RAT. I built a multilevel Bayesian logistic regression with the following specifications:  
+
+Dependent variable: creativity score was used a dichotomous outcome measure. If participants solved an item correctly, they got a score of 1, otherwise they got 0.  
+
+Fixed effect: the only predictor was the VR condition (Threat (0) vs. Control(1)). 
+
+Random effects: Different items in the RAT and different participants could be sources of clustering in the data. Therefore, I added random intercepts for these two levels.
+  
+```{r}
+Creativity_model_dummy<- glmer(score_fac ~ VR_fac + (1|subject_id) + (1| Item_Num), 
+data = pivot_data, family = binomial, control = glmerControl(optimizer ='bobyqa',
+optCtrl=list(maxfun=2e5)))
+
+summary(Creativity_model_dummy)
+
+```
+
+
+```{r}
+ggplot(pivot_data_2, aes(VR_fac, score)) +
+  geom_point(alpha=.1, size = 3) +
+  geom_smooth(
+    aes(x = as.numeric(VR_fac)), #added aesthetic to layer
+    method = "glm",
+    method.args = list(family = "binomial"),
+    se = FALSE
+  ) + 
+  xlab("VR Condition") + 
+  ylab("Creativity Score") + 
+  theme_classic() +
+  theme(plot.title = element_text(size = 15))+
+  theme(axis.text = element_text(size = 15)) +
+  theme(axis.title = element_text(size = 15)) +
+  theme(legend.title = element_text(size = 15)) + 
+  theme(legend.text = element_text(size = 15))
+
+```
+
+
